@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BBBus — Preview</title>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --surface: #1a1a22;
+    --surface-hover: #22222d;
+    --border: #2a2a38;
+    --text-primary: #e8e8ed;
+    --text-secondary: #7b7b8a;
+    --text-muted: #515161;
+    --accent: #6c8cff;
+    --accent-dim: rgba(108,140,255,0.12);
+    --green: #3dd68c;
+    --green-dim: rgba(61,214,140,0.12);
+    --red: #ff5c5c;
+    --red-dim: rgba(255,92,92,0.12);
+    --input-bg: #14141a;
+    --input-focus: #1e1e2a;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 50% -10%, rgba(108,140,255,0.06), transparent),
+      radial-gradient(ellipse 50% 40% at 80% 80%, rgba(61,214,140,0.04), transparent);
+  }
+
+  .app {
+    width: 280px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px 18px 16px;
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.03) inset,
+      0 8px 40px rgba(0,0,0,0.4);
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .logo {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
+  }
+
+  .logo span {
+    color: var(--accent);
+  }
+
+  .toggles {
+    display: flex;
+    gap: 10px;
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.2s;
+  }
+  .toggle:hover { color: var(--text-primary); }
+  .toggle.active { color: var(--accent); }
+
+  .toggle-dot {
+    width: 16px;
+    height: 10px;
+    border-radius: 5px;
+    background: var(--border);
+    position: relative;
+    transition: background 0.25s;
+  }
+  .toggle-dot::after {
+    content: '';
+    position: absolute;
+    top: 1px; left: 1px;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .toggle.active .toggle-dot {
+    background: var(--accent);
+  }
+  .toggle.active .toggle-dot::after {
+    transform: translateX(6px);
+  }
+
+  /* Card */
+  .card {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 14px 6px;
+  }
+
+  .card-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .card-title h2 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .icon-btn {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+  .icon-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+  .icon-btn:active {
+    transform: scale(0.95);
+  }
+
+  /* Form */
+  .field {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .field label {
+    width: 56px;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .field input {
+    flex: 1;
+    min-width: 0;          /* 允许 flex 收缩，防止超出容器 */
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    outline: none;
+    transition: all 0.2s;
+  }
+  .field input:focus {
+    border-color: var(--accent);
+    background: var(--input-focus);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .field input::placeholder {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+
+  /* Buttons */
+  .btn-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .btn {
+    flex: 1;
+    height: 36px;
+    border: none;
+    border-radius: 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn-start {
+    background: var(--green);
+    color: #0f0f13;
+    box-shadow: 0 2px 12px var(--green-dim);
+  }
+  .btn-start:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 4px 20px var(--green-dim);
+    transform: translateY(-1px);
+  }
+  .btn-start:active {
+    transform: scale(0.97) translateY(0);
+  }
+
+  .btn-stop {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+  }
+  .btn-stop:hover {
+    border-color: var(--red);
+    color: var(--red);
+    background: var(--red-dim);
+  }
+  .btn-stop:active {
+    transform: scale(0.97);
+  }
+
+  /* Running state */
+  .app.running .btn-start {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    box-shadow: none;
+  }
+  .app.running .btn-start:hover {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+    transform: none;
+  }
+  .app.running .btn-stop {
+    background: var(--red);
+    color: #fff;
+    border: none;
+    box-shadow: 0 2px 12px var(--red-dim);
+  }
+  .app.running .btn-stop:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 4px 20px var(--red-dim);
+    transform: translateY(-1px);
+  }
+  .app.running .btn-stop:active {
+    transform: scale(0.97) translateY(0);
+  }
+
+  /* Status indicator */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 10px;
+    font-size: 10px;
+    color: var(--text-muted);
+    gap: 6px;
+  }
+
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+  .app.running .status-dot {
+    background: var(--green);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--green); }
+    50% { opacity: 0.6; box-shadow: 0 0 0 4px transparent; }
+  }
+
+  /* Divider */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 8px 0 6px;
+    opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">BB<span>Bus</span></div>
+    <div class="toggles">
+      <label class="toggle" id="toggle-log" onclick="toggleLog()">
+        <div class="toggle-dot"></div>
+        <span>日志</span>
+      </label>
+      <label class="toggle active" id="toggle-topmost" onclick="toggleTopmost()">
+        <div class="toggle-dot"></div>
+        <span>置顶</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Card -->
+  <div class="card">
+    <div class="card-title">
+      <h2>目标配置</h2>
+      <div class="card-actions">
+        <button class="icon-btn" title="浏览进程">☰</button>
+        <button class="icon-btn" title="瞄准窗口">⊙</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>进程名称</label>
+      <input type="text" placeholder="notepad.exe" value="notepad.exe">
+    </div>
+    <div class="field">
+      <label>PID</label>
+      <input type="text" placeholder="自动检测" value="1234">
+    </div>
+    <div class="field">
+      <label>输出按键</label>
+      <input type="text" placeholder="f1" value="f1">
+    </div>
+    <div class="field">
+      <label>间隔下限</label>
+      <input type="text" placeholder="ms" value="50">
+    </div>
+    <div class="field">
+      <label>间隔上限</label>
+      <input type="text" placeholder="ms" value="950">
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="field">
+      <label>副输出键</label>
+      <input type="text" placeholder="空=禁用" value="" style="color:var(--text-muted)">
+    </div>
+    <div class="field">
+      <label>副键间隔</label>
+      <input type="text" placeholder="ms" value="5000">
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="field">
+      <label>快速热键</label>
+      <input type="text" placeholder="ctrl+shift+k" value="ctrl+shift+k">
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <div class="btn-group">
+    <button class="btn btn-start" id="btn-start" onclick="toggleRunning()">启动</button>
+    <button class="btn btn-stop" id="btn-stop" onclick="toggleRunning()">停止</button>
+  </div>
+
+  <!-- Status -->
+  <div class="status-bar">
+    <div class="status-dot"></div>
+    <span id="status-text">待命中</span>
+  </div>
+</div>
+
+<script>
+  let running = false;
+  let logEnabled = false;
+
+  function toggleRunning() {
+    running = !running;
+    const app = document.getElementById('app');
+    const status = document.getElementById('status-text');
+    if (running) {
+      app.classList.add('running');
+      status.textContent = '运行中 — notepad.exe · f1';
+    } else {
+      app.classList.remove('running');
+      status.textContent = '待命中';
+    }
+  }
+
+  function toggleLog() {
+    logEnabled = !logEnabled;
+    document.getElementById('toggle-log').classList.toggle('active', logEnabled);
+  }
+
+  function toggleTopmost() {
+    const el = document.getElementById('toggle-topmost');
+    el.classList.toggle('active');
+  }
+</script>
+</body>
+</html>
