@@ -1,6 +1,26 @@
-# PyInstaller 构建产物
+# ── Python 字节码 / 缓存 ──
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+
+# ── PyInstaller 构建产物（编译副产物）──
 build/
 dist/
 *.spec
-__pycache__/
-*.py[cod]
+
+# ── 日志与运行时产物 ──
+*.log
+BBBus.log
+
+# ── 编辑器 / IDE ──
+.idea/
+.vscode/
+*.swp
+
+# ── 项目内部数据（不纳入版本库）──
+.workbuddy/
+
+# ── 操作系统 ──
+Thumbs.db
+.DS_Store

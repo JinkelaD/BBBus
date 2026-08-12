@@ -1,12 +1,12 @@
 {
-  "name": "Notepad--.exe",
-  "pid": 46140,
+  "name": "ChangHong.exe",
+  "pid": 24188,
   "target_key": "1",
   "interval_min": 650,
   "interval_max": 950,
   "sub_key": "2",
-  "sub_key_interval": 1500,
-  "hotkey": "F2",
+  "sub_key_interval": 3000,
+  "hotkey": "ctrl+shift+wheel_up",
   "topmost": true,
   "log_enabled": false
 }

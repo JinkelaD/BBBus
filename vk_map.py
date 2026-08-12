@@ -35,6 +35,18 @@ VK_MAP = {
     "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
 }
 
+# ── 鼠标按键名 → (类型, 标识) ──
+#   xbtn : 鼠标侧键（标识为 XBUTTON1=0x0001 / XBUTTON2=0x0002，取自钩子 mouseData 高字）
+#   wheel: 鼠标滚轮（dir=+1 上滚 / -1 下滚）
+# 说明：键盘可用 GetAsyncKeyState 轮询；鼠标侧键与滚轮无法用其可靠检测，
+#       需在 hotkey_manager 中改用 WH_MOUSE_LL 低层鼠标钩子捕获。
+MOUSE_MAP = {
+    "mb4": ("xbtn", 0x0001),   # 鼠标侧键1（前进键）
+    "mb5": ("xbtn", 0x0002),   # 鼠标侧键2（后退键）
+    "wheel_up": ("wheel", 1),  # 滚轮上滚
+    "wheel_down": ("wheel", -1),  # 滚轮下滚
+}
+
 # 修饰键标志位 → VK 映射
 _MOD_FLAGS = [
     (0x0002, VK_CONTROL),  # ctrl
