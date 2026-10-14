@@ -4,3 +4,10 @@ dist/
 *.spec
 __pycache__/
 *.py[cod]
+
+# 本地产物 / 备份（不入库）
+.workbuddy/
+backup_before_optimize/
+BBBus-main.zip
+BBBus V4.0 优化实施说明.md
+

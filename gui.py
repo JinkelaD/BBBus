@@ -9,12 +9,14 @@ import sys             # 判断是否为 PyInstaller 打包环境
 import threading       # Lock 保护 shared_config、Event 控制线程启停、Thread 运行按键循环
 import tkinter as tk   # GUI 主框架
 from tkinter import ttk, messagebox  # ttk 组件（Treeview 用）、消息弹窗
+import psutil          # 进程信息查询（避免方法内重复 import，P3-1）
 
 # ── 项目内部模块 ──
 from config import load_config, save_config, AppConfig
 from hotkey_manager import TkHotkeyManager
 from key_worker import key_press_loop, get_running_processes
-from logger import log, set_enabled
+from logger import log, set_enabled, close_log
+from paths import get_base_path
 
 # ═══════════════════════════════════════════════════════════════
 #  配色常量 — 浅色主题
@@ -39,6 +41,10 @@ LIGHT_INPUT_FOC  = "#ffffff"   # 输入框聚焦背景
 CARD_R = 12                     # 卡片圆角半径
 BTN_ACTIVE_DARKEN = 0.16        # 按钮按下变暗系数
 
+# 图标按钮按下缩放系数及其精确倒数（避免多次点击后浮点累积漂移，P3-9）
+_ICON_SCALE = 0.92
+_ICON_SCALE_INV = 1.0 / _ICON_SCALE
+
 # ═══════════════════════════════════════════════════════════════
 #  字体常量
 # ═══════════════════════════════════════════════════════════════
@@ -55,6 +61,37 @@ def _darken(h: str, a: float) -> str:
     h = h.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"#{max(0,int(r*(1-a))):02x}{max(0,int(g*(1-a))):02x}{max(0,int(b*(1-a))):02x}"
+
+
+class _Tooltip:
+    """极简悬浮提示（Toplevel 实现，无第三方依赖）。"""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tw = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _=None):
+        if self.tw:
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tw = tk.Toplevel(self.widget)
+        self.tw.wm_overrideredirect(True)
+        self.tw.wm_geometry(f"+{x}+{y}")
+        # 关键：提示窗自身也要置顶，否则会被 BBBus 主窗（默认 topmost）遮挡而看不到
+        self.tw.wm_attributes("-topmost", True)
+        self.tw.update_idletasks()
+        tk.Label(self.tw, text=self.text, bg="#2b2b2b", fg="#ffffff",
+                 font=FONT_SMALL, justify=tk.LEFT, relief="solid",
+                 borderwidth=1, padx=6, pady=4).pack()
+
+    def _hide(self, _=None):
+        if self.tw:
+            self.tw.destroy()
+            self.tw = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -200,7 +237,7 @@ class BBBusApp:
         self.root.title("BBBus")
         self.root.configure(bg=LIGHT_BG)
         self.root.resizable(False, False)
-        self.root.geometry("280x560")
+        self.root.geometry("240x560")
 
         self._set_app_icon()
 
@@ -211,6 +248,7 @@ class BBBusApp:
         self.stop_event.set()
         self.worker_thread = None
         self.running = False
+        self._last_resize_w = -1      # 上次重绘宽度，用于跳过无变化的全量重绘（P3-3）
 
         self.hotkey_mgr = TkHotkeyManager(self.root)
 
@@ -223,15 +261,14 @@ class BBBusApp:
         self._load_to_ui(cfg)
         self.root.update()
         self._resize_all()
+        self._apply_hotkey()   # 默认置顶，故启动即注册全局热键；非置顶态下不会注册（避免误触）
 
     # ═══════════════════════════════════════════════════════════
     #  应用图标
     # ═══════════════════════════════════════════════════════════
     def _set_app_icon(self):
-        if getattr(sys, 'frozen', False):
-            base = sys._MEIPASS
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
+        # 打包后资源随 exe 释放到临时目录（sys._MEIPASS），否则用源码基目录
+        base = getattr(sys, "_MEIPASS", None) or get_base_path()
         icon_path = os.path.join(base, "icon", "bbbus_icon.ico")
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
@@ -288,20 +325,19 @@ class BBBusApp:
 
         title_lbl = tk.Label(hdr, text="目标配置", bg=LIGHT_SURFACE, fg=LIGHT_TEXT_SEC,
                              font=FONT_H2)
-        title_lbl.pack(side=tk.LEFT)
+        title_lbl.pack(side=tk.LEFT, padx=(0, 10))
 
-        btn_spacer = tk.Frame(hdr, bg=LIGHT_SURFACE, height=1)
-        btn_spacer.pack(side=tk.LEFT, expand=True, fill=tk.X)
-
-        # 图标按钮 — 自定义 Canvas 绘制，暗色风格
-        self.btn_browse = self._mk_icon_btn(hdr, "☰", self._browse_process)
+        # 图标按钮 — 紧跟标题（☰ 浏览进程列表 / ⊙ 瞄准选择窗口），不再顶到最右
+        self.btn_browse = self._mk_icon_btn(hdr, "browse", self._browse_process)
         self.btn_browse.pack(side=tk.LEFT)
-        self.btn_target = self._mk_icon_btn(hdr, "⊙", self._target_window)
+        self.btn_target = self._mk_icon_btn(hdr, "target", self._target_window)
         self.btn_target.pack(side=tk.LEFT, padx=(6, 0))
+        _Tooltip(self.btn_browse, "浏览进程列表")
+        _Tooltip(self.btn_target, "瞄准选择窗口")
 
         # ═══════════ 表单区域 ═══════════
         form = tk.Frame(self.cfg_frame, bg=LIGHT_SURFACE)
-        form.pack(anchor=tk.W, padx=14, pady=(0, 8))
+        form.pack(fill=tk.X, padx=14, pady=(0, 8))
 
         lbl_w = 7
 
@@ -311,7 +347,6 @@ class BBBusApp:
             lbl = tk.Label(r, text=label_text, bg=LIGHT_SURFACE, fg=LIGHT_TEXT_MUTED,
                            font=FONT_SMALL, width=lbl_w, anchor=tk.W)
             lbl.pack(side=tk.LEFT)
-            self._row_lbl = lbl
             return r
 
         def _sep():
@@ -322,31 +357,33 @@ class BBBusApp:
         # 1) 进程名称
         rp = _row("进程名称")
         self.name_var = tk.StringVar()
-        self._mk_entry(rp, self.name_var, "notepad.exe").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rp, self.name_var, "notepad.exe").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 2) PID
         rpid = _row("PID")
         self.pid_var = tk.StringVar()
-        pe = self._mk_entry(rpid, self.pid_var, "自动检测")
-        pe.pack(side=tk.LEFT, padx=(4, 0))
+        pe = self._mk_entry(rpid, self.pid_var, "自动检测", on_enter=self._on_pid_focusout)
+        pe.pack(side=tk.RIGHT, padx=(4, 0))
         pid_entry = pe._entry
         pid_entry.bind("<FocusOut>", self._on_pid_focusout)
-        pid_entry.bind("<Return>", self._on_pid_focusout)
+
+        # 分隔线（PID 与输出按键之间）
+        _sep()
 
         # 3) 输出按键
         rk = _row("输出按键")
         self.key_var = tk.StringVar()
-        self._mk_entry(rk, self.key_var, "f1").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rk, self.key_var, "f1").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 4) 间隔下限
         rmin = _row("间隔下限")
         self.min_var = tk.StringVar()
-        self._mk_entry(rmin, self.min_var, "ms").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rmin, self.min_var, "ms").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 5) 间隔上限
         rmax = _row("间隔上限")
         self.max_var = tk.StringVar()
-        self._mk_entry(rmax, self.max_var, "ms").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rmax, self.max_var, "ms").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 分隔线
         _sep()
@@ -354,12 +391,12 @@ class BBBusApp:
         # 6) 副输出按键
         rsk = _row("副输出键")
         self.sub_key_var = tk.StringVar()
-        self._mk_entry(rsk, self.sub_key_var, "空=禁用").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rsk, self.sub_key_var, "空=禁用").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 7) 副键间隔
         rsi = _row("副键间隔")
         self.sub_interval_var = tk.StringVar()
-        self._mk_entry(rsi, self.sub_interval_var, "ms").pack(side=tk.LEFT, padx=(4, 0))
+        self._mk_entry(rsi, self.sub_interval_var, "ms").pack(side=tk.RIGHT, padx=(4, 0))
 
         # 分隔线
         _sep()
@@ -367,7 +404,16 @@ class BBBusApp:
         # 8) 快速热键
         rh = _row("快速热键")
         self.hotkey_var = tk.StringVar()
-        self._mk_entry(rh, self.hotkey_var, "ctrl+shift+k").pack(side=tk.LEFT, padx=(4, 0))
+        hk_entry = self._mk_entry(rh, self.hotkey_var, "如 ctrl+shift+k / mb4")
+        hk_entry.pack(side=tk.RIGHT, padx=(4, 0))
+        _Tooltip(hk_entry._entry,
+                 "全局热键（可留空禁用）。\n"
+                 "键盘：ctrl+shift+k\n"
+                 "鼠标侧键：mb4 / mb5\n"
+                 "鼠标滚轮：wheel_up / wheel_down\n"
+                 "可叠加修饰键，如 ctrl+mb4")
+        # 修改热键后失焦即重新注册（组合键修改后立即生效）
+        hk_entry._entry.bind("<FocusOut>", lambda e: self._apply_hotkey(), add="+")
 
         # ═══════════ 按钮区域（Canvas 绘制药丸按钮） ═══════════
         self.btn_canvas = tk.Canvas(self.root, bg=LIGHT_BG, highlightthickness=0)
@@ -388,8 +434,12 @@ class BBBusApp:
         # ═══════════ 关闭协议 ═══════════
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _mk_entry(self, parent, var, placeholder=""):
-        """创建暗色主题输入框容器（圆角感知边框，固定宽度 120px）。"""
+    def _mk_entry(self, parent, var, placeholder="", on_enter=None):
+        """创建暗色主题输入框容器（圆角感知边框，固定宽度 120px）。
+
+        on_enter: 可选回调，回车确认时先调用（如 PID 反查进程名）。
+        回车后统一移出焦点，避免停留在输入框内误输入。
+        """
         # 用 Frame 背景色模拟 1px 边框（比 highlightthickness 更平滑）
         f = tk.Frame(parent, bg=LIGHT_BORDER, width=120, height=30)
         f.pack_propagate(False)
@@ -450,41 +500,65 @@ class BBBusApp:
             e.bind("<FocusIn>",  _on_focus_in)
             e.bind("<FocusOut>", _on_focus_out)
 
+        # 回车：先执行 on_enter 回调（若提供），随后移出焦点，
+        # 避免确认后仍停在输入框内继续误输入。
+        def _on_enter(ev=None):
+            if on_enter:
+                on_enter(ev)
+            # 让输入框失焦（触发 <FocusOut>：复位边框/占位符，焦点离开输入框）
+            self.root.focus_set()
+        e.bind("<Return>", _on_enter)
+
         # 保存引用以便外部绑定
         f._entry = e
         return f
 
-    def _mk_icon_btn(self, parent, text, cmd):
-        """创建 Canvas 绘制的圆角图标按钮（26×26，模拟 Web 风格）。"""
+    def _mk_icon_btn(self, parent, kind, cmd):
+        """创建 Canvas 绘制的图标按钮（26×26，无边框/无阴影）。
+
+        kind: "browse" 进程列表（☰ 列表样式）/ "target" 瞄准选窗（⊙ 靶心）。
+        用 Segoe UI Symbol 字体渲染 ☰/⊙，避免豆腐块方框；悬停给浅灰底反馈。
+        """
         SIZE = 26
         RADIUS = 6
+        # 注意：Canvas 默认 borderwidth=2 + relief='sunken'，会在控件四周画一圈 3D
+        # 凹陷边框（左上暗边、右下亮边），与圆角矩形叠加会出现"左上竖线 + 右下三角"
+        # 的伪影；必须显式清零边框、压平浮雕。
+        # 按钮本身不画边框/底色（透明），只有矢量图标浮在标题栏白底上；
+        # 悬停时给一层浅灰底做点击反馈（仍无边框、无阴影）。
         cv = tk.Canvas(parent, width=SIZE, height=SIZE,
-                       bg=LIGHT_SURFACE, highlightthickness=0, cursor="hand2")
+                       bg=LIGHT_SURFACE, borderwidth=0, relief="flat",
+                       highlightthickness=0, cursor="hand2")
 
-        def _draw(fill, outline, text_fill):
+        glyph = "\u2630" if kind == "browse" else "\u2299"  # ☰ 列表 / ⊙ 靶心
+
+        def _draw(fill, bg):
             cv.delete("all")
-            _round_rect(cv, 1, 1, SIZE - 1, SIZE - 1, RADIUS,
-                        fill=fill, outline=outline, width=1)
-            cv.create_text(SIZE // 2, SIZE // 2, text=text,
-                           fill=text_fill, font=("Segoe UI", 11))
+            # 无边框、无阴影：默认透明（仅字形），悬停给浅灰底反馈
+            if bg:
+                _round_rect(cv, 1, 1, SIZE - 1, SIZE - 1, RADIUS,
+                            fill=bg, outline="", width=0)
+            # 用 Segoe UI Symbol 字体渲染，避免 ☰/⊙ 在 Segoe UI 下变豆腐块方框
+            cv.create_text(SIZE // 2, SIZE // 2, text=glyph,
+                           fill=fill, font=("Segoe UI Symbol", 12))
 
-        def _draw_default():
-            _draw(LIGHT_SURFACE, LIGHT_BORDER, LIGHT_TEXT_SEC)
+        def _enter(_):
+            _draw(LIGHT_TEXT, LIGHT_SURFACE_HV)
 
-        def _draw_hover():
-            _draw(LIGHT_SURFACE_HV, LIGHT_TEXT_MUTED, LIGHT_TEXT)
+        def _leave(_):
+            _draw(LIGHT_TEXT_SEC, "")
 
-        _draw_default()
-
-        cv.bind("<Enter>", lambda _: _draw_hover())
-        cv.bind("<Leave>", lambda _: _draw_default())
+        _leave(None)
+        cv.bind("<Enter>", _enter, add="+")
+        cv.bind("<Leave>", _leave, add="+")
         cv.bind("<Button-1>", lambda _: cmd())
 
-        # 按下缩放效果
+        # 按下缩放效果（用常量与其精确倒数，避免多次点击后浮点累积漂移，P3-9）
         def _press(e):
-            cv.scale("all", SIZE // 2, SIZE // 2, 0.92, 0.92)
+            cv.scale("all", SIZE // 2, SIZE // 2, _ICON_SCALE, _ICON_SCALE)
         def _release(e):
-            cv.scale("all", SIZE // 2, SIZE // 2, 1 / 0.92, 1 / 0.92)
+            cv.scale("all", SIZE // 2, SIZE // 2,
+                     _ICON_SCALE_INV, _ICON_SCALE_INV)
         cv.bind("<ButtonPress-1>", _press, add="+")
         cv.bind("<ButtonRelease-1>", _release, add="+")
         return cv
@@ -493,7 +567,6 @@ class BBBusApp:
     #  PID 自动回填
     # ═══════════════════════════════════════════════════════════
     def _on_pid_focusout(self, event=None):
-        import psutil
         pid_str = self.pid_var.get().strip()
         if not pid_str:
             return
@@ -510,9 +583,27 @@ class BBBusApp:
     # ═══════════════════════════════════════════════════════════
     #  尺寸计算 & Canvas 重绘
     # ═══════════════════════════════════════════════════════════
-    def _resize_all(self):
+    def _update_status(self):
+        """刷新状态灯与状态文案（轻量，频繁调用成本低）。"""
+        if self.running:
+            self.status_dot_canvas.itemconfig(self._status_dot, fill=LIGHT_GREEN)
+            name = self.name_var.get().strip() or "?"
+            key = self.key_var.get().strip() or "?"
+            self.status_label.config(text=f"运行中 — {name} · {key}", fg=LIGHT_TEXT_SEC)
+        else:
+            self.status_dot_canvas.itemconfig(self._status_dot, fill=LIGHT_BORDER)
+            self.status_label.config(text="待命中", fg=LIGHT_TEXT_MUTED)
+
+    def _resize_all(self, force: bool = False):
         self.root.update_idletasks()
         w = self.root.winfo_width() - 36  # 窗口宽 − 两侧 padding
+
+        # 尺寸未变时跳过卡片/按钮的全量重绘（避免无谓的 delete+recreate，P3-3），
+        # 但状态文案仍需按运行态刷新。
+        if not force and w == self._last_resize_w:
+            self._update_status()
+            return
+        self._last_resize_w = w
 
         content_h = self.cfg_frame.winfo_reqheight()
         pill_h, pill_margin = 36, 6
@@ -527,7 +618,7 @@ class BBBusApp:
         self.cfg_frame.place(x=0, y=0, width=w, height=content_h)
 
         # ── 药丸按钮：启动 / 停止 ──
-        bw, bh, gap = 92, pill_h, 12
+        bw, bh, gap = 84, pill_h, 12
         btn_y = pill_margin
         total_btn_w = bw * 2 + gap
         x_center = w // 2
@@ -552,15 +643,7 @@ class BBBusApp:
 
         self.btn_canvas.config(height=pill_h + pill_margin * 2)
 
-        # 状态灯
-        if self.running:
-            self.status_dot_canvas.itemconfig(self._status_dot, fill=LIGHT_GREEN)
-            name = self.name_var.get().strip() or "?"
-            key = self.key_var.get().strip() or "?"
-            self.status_label.config(text=f"运行中 — {name} · {key}", fg=LIGHT_TEXT_SEC)
-        else:
-            self.status_dot_canvas.itemconfig(self._status_dot, fill=LIGHT_BORDER)
-            self.status_label.config(text="待命中", fg=LIGHT_TEXT_MUTED)
+        self._update_status()
 
     def _on_resize(self, ev):
         if ev.widget == self.root:
@@ -583,7 +666,6 @@ class BBBusApp:
         self.hotkey_var.set(cfg.hotkey)
         if cfg.topmost:
             self.root.attributes("-topmost", True)
-            self._start_hotkey()
 
     def _parse_int(self, s: str, default: int = 50) -> int:
         try:
@@ -629,7 +711,6 @@ class BBBusApp:
     #  瞄准镜
     # ═══════════════════════════════════════════════════════════
     def _target_window(self):
-        import psutil
         u = ctypes.windll.user32
         GR = 2
 
@@ -680,7 +761,8 @@ class BBBusApp:
                 pv = cp.value
                 try:
                     R["name"] = psutil.Process(pv).name() if pv else ""
-                except:
+                except Exception as exc:
+                    log(f"瞄准镜获取进程名失败: {exc}")
                     R["name"] = ""
                 R["pid"] = pv
             sc.destroy(); self.root.deiconify(); self.root.lift()
@@ -725,7 +807,7 @@ class BBBusApp:
         se = tk.Entry(sfi, textvariable=sv, bg=LIGHT_INPUT_BG, fg=LIGHT_TEXT,
                       insertbackground=LIGHT_ACCENT, font=FONT_MAIN,
                       relief="flat", borderwidth=0)
-        se.pack(ipady=2, padx=6, pady=3)
+        se.pack(fill=tk.X, expand=True, ipady=2, padx=6, pady=3)
         se.bind("<FocusIn>",  lambda e: sf.config(bg=LIGHT_ACCENT))
         se.bind("<FocusOut>", lambda e: sf.config(bg=LIGHT_BORDER))
 
@@ -845,7 +927,7 @@ class BBBusApp:
         self.worker_thread = t
         self.running = True
         log(f"启动 — 目标进程: {name}, 按键: {self.key_var.get().strip()}")
-        self._resize_all()
+        self._resize_all(force=True)
 
     def _stop(self):
         if not self.running:
@@ -853,25 +935,42 @@ class BBBusApp:
         self.stop_event.set()
         self.running = False
         log("停止")
-        self._resize_all()
+        self._resize_all(force=True)
 
     # ═══════════════════════════════════════════════════════════
     #  全局热键
     # ═══════════════════════════════════════════════════════════
-    def _start_hotkey(self):
+    def _apply_hotkey(self):
+        """（重新）注册并启动全局热键。
+
+        全局热键仅在窗口处于“置顶”状态时生效 —— 关闭置顶即停止热键，
+        避免非置顶状态下误触全局快捷键。
+        在应用启动（且默认置顶）、用户切换“置顶”开关、或修改热键输入框
+        （失焦）时都会调用，因此组合键（如 ctrl+shift+k）修改后能立即生效。
+        """
+        # 仅当窗口置顶时才允许全局热键，避免误触
+        if not self.topmost_toggle.is_on():
+            self.hotkey_mgr.stop()
+            return
+        self.hotkey_mgr.stop()
         hk = self.hotkey_var.get().strip()
-        if hk:
-            self.hotkey_mgr.register(
-                hk, lambda: self.root.after(
-                    0, lambda: self._stop() if self.running else self._start()))
-        self.hotkey_mgr.start()
+        if not hk:
+            return
+        ok = self.hotkey_mgr.register(
+            hk, lambda: self.root.after(
+                0, lambda: self._stop() if self.running else self._start()))
+        if not ok:
+            print(f"[BBBus] 热键注册失败（不支持的组合）: {hk}")
+        else:
+            self.hotkey_mgr.start()
 
     def _stop_hotkey(self):
         self.hotkey_mgr.stop()
 
     def _toggle_topmost(self, on: bool):
         self.root.attributes("-topmost", on)
-        self._start_hotkey() if on else self._stop_hotkey()
+        # 置顶开启时注册全局热键，关闭时停止 —— 仅置顶态下热键才生效，避免误触
+        self._apply_hotkey()
 
     def _toggle_log(self, on: bool):
         set_enabled(on)
@@ -884,5 +983,7 @@ class BBBusApp:
         self._stop_hotkey()
         self._stop()
         if self.worker_thread and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=0.5)
+            # 工作线程在 stop_event 置位后会立即从 wait 返回，1.0s 余量充足（P2-6）
+            self.worker_thread.join(timeout=1.0)
+        close_log()  # 释放日志句柄
         self.root.destroy()
